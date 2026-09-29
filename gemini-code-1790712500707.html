@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>2D Airbus A320 Flight Simulator</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #111;
+      color: #fff;
+      font-family: sans-serif;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    #gameCanvas {
+      background: #87CEEB;
+      box-shadow: 0 0 20px rgba(0,0,0,0.5);
+      margin-top: 10px;
+    }
+
+    .menu-panel {
+      position: absolute;
+      top: 50px;
+      background: rgba(20, 20, 20, 0.95);
+      padding: 20px;
+      border-radius: 8px;
+      border: 2px solid #00FF00;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      width: 300px;
+    }
+
+    .menu-panel h2 {
+      margin: 0 0 10px 0;
+      color: #00FF00;
+      text-align: center;
+    }
+
+    .menu-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .menu-row label {
+      font-size: 14px;
+    }
+
+    .menu-row input {
+      width: 80px;
+      padding: 4px;
+      background: #222;
+      color: #fff;
+      border: 1px solid #555;
+      border-radius: 4px;
+    }
+
+    .start-btn {
+      background-color: #00AA00;
+      color: white;
+      border: none;
+      padding: 10px;
+      font-weight: bold;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-top: 10px;
+    }
+
+    .start-btn:hover {
+      background-color: #00FF00;
+      color: #000;
+    }
+
+    .emergency-panel {
+      margin-top: 10px;
+      display: flex;
+      gap: 10px;
+    }
+
+    .emergency-panel button {
+      background-color: #cc0000;
+      color: white;
+      border: none;
+      padding: 8px 14px;
+      font-weight: bold;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    .emergency-panel button:hover {
+      background-color: #ff3333;
+    }
+
+    .controls-hint {
+      margin-top: 8px;
+      font-size: 14px;
+      color: #ccc;
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="gameCanvas" width="900" height="400"></canvas>
+
+<div id="preflightMenu" class="menu-panel">
+  <h2>Flight Manifest</h2>
+  <div class="menu-row">
+    <label>Passengers:</label>
+    <input type="number" id="inputPassengers" value="150" min="0" max="180">
+  </div>
+  <div class="menu-row">
+    <label>Fuel (lbs):</label>
+    <input type="number" id="inputFuel" value="18000" min="1000" max="40000">
+  </div>
+  <div class="menu-row">
+    <label>Meals:</label>
+    <input type="number" id="inputMeals" value="150" min="0" max="200">
+  </div>
+  <button class="start-btn" onclick="startFlight()">Start Flight</button>
+</div>
+
+<div class="emergency-panel">
+  <button onclick="triggerBirdStrike()">Bird Strike</button>
+  <button onclick="triggerGearJam()">Gear Jam</button>
+  <button onclick="triggerHUDGlitch()">HUD Malfunction</button>
+</div>
+
+<div class="controls-hint">
+  <b>Controls:</b> Up/Down Arrows (or W/S) = Pitch | Right/Left Arrows (or D/A) = Throttle | <b>G</b> = Gear | <b>R</b> = Restart
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+let gameStarted = false;
+
+let flightManifest = {
+  passengers: 150,
+  fuelPounds: 18000,
+  meals: 150
+};
+
+let plane = {
+  x: 200,
+  y: 300,
+  vx: 0,
+  vy: 0,
+  speed: 0,
+  maxSpeed: 12,
+  angle: 0,
+  gearPosition: 1,
+  gearTarget: 1,
+  gearSpeed: 0.02,
+  suspensionCompression: 0, // Dynamic active suspension compression (0 to 1)
+  suspensionVelocity: 0,    // Physics state for suspension spring bounce
+  altitude: 0,
+  crashed: false
+};
+
+let engineFault = false;
+let gearJammed = false;
+let hudMalfunction = false;
+let atcMessage = "ATC: Cleared for pushback. Load manifest complete.";
+
+let cameraX = 0;
+const GROUND_Y = 320;
+const keys = {};
+
+let particles = [];
+let debrisList = [];
+let birds = [];
+
+const clouds = [
+  { x: 100, y: 50, scale: 0.8 },
+  { x: 350, y: 80, scale: 1.2 },
+  { x: 650, y: 40, scale: 1.0 },
+  { x: 950, y: 70, scale: 0.9 }
+];
+
+function startFlight() {
+  flightManifest.passengers = parseInt(document.getElementById('inputPassengers').value) || 0;
+  flightManifest.fuelPounds = parseInt(document.getElementById('inputFuel').value) || 0;
+  flightManifest.meals = parseInt(document.getElementById('inputMeals').value) || 0;
+
+  document.getElementById('preflightMenu').style.display = 'none';
+  gameStarted = true;
+  atcMessage = "ATC: A320, cleared for takeoff Runway 09.";
+}
+
+function triggerBirdStrike() {
+  if (engineFault || plane.crashed || !gameStarted) return;
+
+  birds = [];
+  for (let i = 0; i < 10; i++) {
+    birds.push({
+      x: canvas.width + Math.random() * 150,
+      y: plane.y + (Math.random() - 0.5) * 60,
+      speed: Math.random() * 3 + 6,
+      size: 3
+    });
+  }
+}
+
+function triggerGearJam() {
+  if (!gameStarted) return;
+  gearJammed = true;
+  atcMessage = "ATC: Caution, gear disagreement indicated.";
+}
+
+function triggerHUDGlitch() {
+  if (!gameStarted) return;
+  hudMalfunction = !hudMalfunction;
+}
+
+function resetGame() {
+  plane = {
+    x: 200,
+    y: 300,
+    vx: 0,
+    vy: 0,
+    speed: 0,
+    maxSpeed: 12,
+    angle: 0,
+    gearPosition: 1,
+    gearTarget: 1,
+    gearSpeed: 0.02,
+    suspensionCompression: 0,
+    suspensionVelocity: 0,
+    altitude: 0,
+    crashed: false
+  };
+  engineFault = false;
+  gearJammed = false;
+  hudMalfunction = false;
+  particles = [];
+  debrisList = [];
+  birds = [];
+  document.getElementById('preflightMenu').style.display = 'flex';
+  gameStarted = false;
+  atcMessage = "ATC: Cleared for pushback. Load manifest complete.";
+}
+
+window.addEventListener('keydown', (e) => {
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
+    e.preventDefault();
+  }
+
+  keys[e.key.toLowerCase()] = true;
+  keys[e.key] = true;
+
+  if (e.key.toLowerCase() === 'g' && !plane.crashed && !gearJammed && gameStarted) {
+    plane.gearTarget = plane.gearTarget === 1 ? 0 : 1;
+  }
+
+  if (e.key.toLowerCase() === 'r') {
+    resetGame();
+  }
+});
+
+window.addEventListener('keyup', (e) => {
+  keys[e.key.toLowerCase()] = false;
+  keys[e.key] = false;
+});
+
+function spawnEngineExhaust(x, y) {
+  if (plane.speed > 0.5) {
+    particles.push({
+      x: x,
+      y: y + (Math.random() - 0.5) * 3,
+      vx: -plane.speed * 0.9 - Math.random() * 2,
+      vy: (Math.random() - 0.5) * 1,
+      size: Math.random() * 4 + 2,
+      color: 'rgba(255, 255, 255, 0.25)',
+      life: 0.5,
+      decay: 0.05
+    });
+  }
+}
+
+function spawnEngineFire(x, y) {
+  for (let i = 0; i < 3; i++) {
+    particles.push({
+      x: x,
+      y: y + (Math.random() - 0.5) * 4,
+      vx: -plane.speed * 0.8 - Math.random() * 3 - 2,
+      vy: (Math.random() - 0.5) * 2 - 1,
+      size: Math.random() * 6 + 3,
+      color: Math.random() > 0.4 ? '#FF4500' : (Math.random() > 0.5 ? '#FF8C00' : '#444444'),
+      life: 1,
+      decay: Math.random() * 0.04 + 0.02
+    });
+  }
+}
+
+function spawnSparks(x, y, amount) {
+  for (let i = 0; i < amount; i++) {
+    particles.push({
+      x: x + (Math.random() - 0.5) * 20,
+      y: y,
+      vx: (Math.random() - 0.5) * 6 - plane.speed * 0.5,
+      vy: -Math.random() * 4 - 1,
+      size: Math.random() * 3 + 1,
+      color: Math.random() > 0.3 ? '#FFA500' : '#FFFF00',
+      life: 1,
+      decay: Math.random() * 0.05 + 0.02
+    });
+  }
+}
+
+function triggerExplosion(x, y) {
+  atcMessage = "ATC: Emergency declared! Emergency crews responding.";
+  for (let i = 0; i < 80; i++) {
+    const isFire = Math.random() > 0.4;
+    particles.push({
+      x: x,
+      y: y,
+      vx: (Math.random() - 0.5) * 12,
+      vy: (Math.random() - 0.5) * 12 - 4,
+      size: Math.random() * 12 + 4,
+      color: isFire ? (Math.random() > 0.5 ? '#FF4500' : '#FF8C00') : '#555555',
+      life: 1,
+      decay: Math.random() * 0.02 + 0.01
+    });
+  }
+
+  const colors = ['#E8E8E8', '#003399', '#555', '#333', '#B0C4DE'];
+  for (let i = 0; i < 25; i++) {
+    debrisList.push({
+      x: x,
+      y: y,
+      vx: (Math.random() - 0.5) * 16,
+      vy: -Math.random() * 12 - 4,
+      angle: Math.random() * Math.PI * 2,
+      vRot: (Math.random() - 0.5) * 0.3,
+      size: Math.random() * 15 + 5,
+      color: colors[Math.floor(Math.random() * colors.length)]
+    });
+  }
+}
+
+function update() {
+  if (!gameStarted) return;
+
+  if (!plane.crashed) {
+    if (keys['ArrowRight'] || keys['d']) plane.speed = Math.min(plane.speed + 0.05, plane.maxSpeed);
+    if (keys['ArrowLeft'] || keys['a']) plane.speed = Math.max(plane.speed - 0.05, 0);
+
+    const cosA = Math.cos(plane.angle);
+    const sinA = Math.sin(plane.angle);
+    const engineX = plane.x + (-10 * cosA - 14 * sinA);
+    const engineY = plane.y + (-10 * sinA + 14 * cosA);
+
+    if (engineFault) {
+      spawnEngineFire(engineX, engineY);
+    } else {
+      spawnEngineExhaust(engineX, engineY);
+    }
+
+    if (keys['ArrowUp'] || keys['w']) plane.angle -= 0.015;
+    if (keys['ArrowDown'] || keys['s']) plane.angle += 0.015;
+
+    plane.angle = Math.max(-0.6, Math.min(0.5, plane.angle));
+
+    if (!gearJammed) {
+      if (plane.gearPosition < plane.gearTarget) {
+        plane.gearPosition = Math.min(plane.gearPosition + plane.gearSpeed, 1);
+      } else if (plane.gearPosition > plane.gearTarget) {
+        plane.gearPosition = Math.max(plane.gearPosition - plane.gearSpeed, 0);
+      }
+    }
+
+    const lift = (plane.speed / plane.maxSpeed) * (-plane.angle) * 4;
+    const gravity = 0.5;
+    plane.vy = gravity - lift;
+    plane.vx = plane.speed;
+
+    cameraX += plane.vx;
+    plane.y += plane.vy;
+
+    // Active Suspension Physics Logic
+    let isGrounded = plane.y >= GROUND_Y - 15 - (plane.gearPosition * 12);
+
+    if (isGrounded && plane.gearPosition > 0.5) {
+      // Calculate spring forces based on impact velocity
+      let targetCompression = Math.min(1, Math.max(0, plane.vy * 0.25 + 0.2));
+      let force = (targetCompression - plane.suspensionCompression) * 0.2;
+      plane.suspensionVelocity += force;
+      plane.suspensionVelocity *= 0.82; // Damping
+      plane.suspensionCompression += plane.suspensionVelocity;
+    } else {
+      // Decompress suspension when airborne
+      plane.suspensionCompression = Math.max(0, plane.suspensionCompression - 0.08);
+    }
+
+    if (plane.y >= GROUND_Y - 15) {
+      if (plane.vy > 3.5 || plane.angle > 0.25) {
+        plane.crashed = true;
+        triggerExplosion(plane.x, GROUND_Y - 10);
+      } else {
+        plane.y = GROUND_Y - 15;
+        if (plane.vy > 0) plane.vy = 0;
+
+        if (plane.gearPosition < 0.5 && plane.speed > 0.5) {
+          spawnSparks(plane.x, GROUND_Y - 5, 4);
+          plane.speed = Math.max(0, plane.speed - 0.03);
+        }
+
+        if (plane.angle > 0) plane.angle = 0;
+      }
+    }
+  }
+
+  for (let i = birds.length - 1; i >= 0; i--) {
+    let b = birds[i];
+    b.x -= b.speed + plane.vx;
+
+    if (Math.abs(b.x - plane.x) < 40 && Math.abs(b.y - plane.y) < 25) {
+      engineFault = true;
+      atcMessage = "ATC: Caution, bird strike reported on engine 1!";
+      birds.splice(i, 1);
+    } else if (b.x < -20) {
+      birds.splice(i, 1);
+    }
+  }
+
+  for (let i = particles.length - 1; i >= 0; i--) {
+    let p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life -= p.decay;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+
+  for (let i = debrisList.length - 1; i >= 0; i--) {
+    let d = debrisList[i];
+    d.x += d.vx;
+    d.y += d.vy;
+    d.vy += 0.4;
+    d.angle += d.vRot;
+
+    if (d.y >= GROUND_Y - 5) {
+      d.y = GROUND_Y - 5;
+      d.vy = -d.vy * 0.4;
+      d.vx *= 0.7;
+    }
+  }
+
+  plane.altitude = Math.max(0, Math.round(GROUND_Y - 15 - plane.y));
+}
+
+function drawEnvironment() {
+  const skyGradient = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
+  skyGradient.addColorStop(0, '#104E8B');
+  skyGradient.addColorStop(0.6, '#4682B4');
+  skyGradient.addColorStop(1, '#B0E0E6');
+  ctx.fillStyle = skyGradient;
+  ctx.fillRect(0, 0, canvas.width, GROUND_Y);
+
+  ctx.fillStyle = 'rgba(255, 255, 220, 0.9)';
+  ctx.beginPath();
+  ctx.arc(750, 60, 35, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = 'rgba(255, 255, 200, 0.2)';
+  ctx.beginPath();
+  ctx.arc(750, 60, 60, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.65)';
+  clouds.forEach(c => {
+    let cloudX = (c.x - cameraX * 0.2) % (canvas.width + 200);
+    if (cloudX < -100) cloudX += canvas.width + 200;
+
+    ctx.beginPath();
+    ctx.arc(cloudX, c.y, 20 * c.scale, 0, Math.PI * 2);
+    ctx.arc(cloudX + 15 * c.scale, c.y - 10 * c.scale, 25 * c.scale, 0, Math.PI * 2);
+    ctx.arc(cloudX + 35 * c.scale, c.y, 20 * c.scale, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  const grassGradient = ctx.createLinearGradient(0, GROUND_Y, 0, canvas.height);
+  grassGradient.addColorStop(0, '#2e7d32');
+  grassGradient.addColorStop(1, '#1b5e20');
+  ctx.fillStyle = grassGradient;
+  ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
+
+  ctx.fillStyle = '#333';
+  ctx.fillRect(0, GROUND_Y - 6, canvas.width, 12);
+
+  ctx.fillStyle = '#FFF';
+  const stripeWidth = 40;
+  const stripeGap = 40;
+  const cycle = stripeWidth + stripeGap;
+  const offset = cameraX % cycle;
+
+  for (let x = -offset; x < canvas.width; x += cycle) {
+    ctx.fillRect(x, GROUND_Y - 1, stripeWidth, 2);
+  }
+}
+
+function drawBirds() {
+  ctx.fillStyle = '#111';
+  birds.forEach(b => {
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.size, 0, Math.PI * 2);
+    ctx.fill();
+  });
+}
+
+function drawA320() {
+  if (plane.crashed || !gameStarted) return;
+
+  const groundDistance = Math.min(100, GROUND_Y - 15 - plane.y);
+  const shadowAlpha = Math.max(0.1, 0.5 - groundDistance / 200);
+  ctx.fillStyle = `rgba(0, 0, 0, ${shadowAlpha})`;
+  ctx.beginPath();
+  ctx.ellipse(plane.x, GROUND_Y - 3, 50, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.save();
+  ctx.translate(plane.x, plane.y);
+  ctx.rotate(plane.angle);
+
+  // Active Suspension Landing Gear Render
+  if (plane.gearPosition > 0) {
+    // Dynamic strut height based on active compression
+    const maxExtension = 14;
+    const compressionOffset = plane.suspensionCompression * 5;
+    const currentGearLength = (maxExtension - compressionOffset) * plane.gearPosition;
+
+    ctx.fillStyle = '#222';
+    ctx.strokeStyle = '#888';
+    ctx.lineWidth = 3;
+
+    // Nose Gear Strut & Piston
+    ctx.beginPath();
+    ctx.moveTo(35, 8);
+    ctx.lineTo(35, 8 + currentGearLength);
+    ctx.stroke();
+
+    // Active Suspension Wheel Hub
+    ctx.beginPath();
+    ctx.arc(35, 8 + currentGearLength + 2, 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Main Gear Strut & Piston
+    ctx.beginPath();
+    ctx.moveTo(-15, 8);
+    ctx.lineTo(-15, 8 + currentGearLength);
+    ctx.stroke();
+
+    // Active Suspension Wheel Hub
+    ctx.beginPath();
+    ctx.arc(-15, 8 + currentGearLength + 2, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Fuselage
+  const bodyGrad = ctx.createLinearGradient(0, -10, 0, 10);
+  bodyGrad.addColorStop(0, '#FFFFFF');
+  bodyGrad.addColorStop(0.7, '#E0E0E0');
+  bodyGrad.addColorStop(1, '#B0B0B0');
+  ctx.fillStyle = bodyGrad;
+
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 55, 10, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Nose Cone
+  ctx.fillStyle = '#BBB';
+  ctx.beginPath();
+  ctx.arc(50, 0, 5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Cockpit
+  ctx.fillStyle = '#0A192F';
+  ctx.beginPath();
+  ctx.moveTo(35, -4);
+  ctx.lineTo(48, -2);
+  ctx.lineTo(45, 1);
+  ctx.lineTo(35, 1);
+  ctx.closePath();
+  ctx.fill();
+
+  // Tail Fin
+  ctx.fillStyle = '#003399';
+  ctx.beginPath();
+  ctx.moveTo(-45, -8);
+  ctx.lineTo(-58, -30);
+  ctx.lineTo(-42, -30);
+  ctx.lineTo(-32, -8);
+  ctx.closePath();
+  ctx.fill();
+
+  // Main Wing
+  const wingGrad = ctx.createLinearGradient(0, 0, 0, 20);
+  wingGrad.addColorStop(0, '#D1D5DB');
+  wingGrad.addColorStop(1, '#9CA3AF');
+  ctx.fillStyle = wingGrad;
+
+  ctx.beginPath();
+  ctx.moveTo(10, 2);
+  ctx.lineTo(-20, 18);
+  ctx.lineTo(-10, 18);
+  ctx.lineTo(22, 2);
+  ctx.closePath();
+  ctx.fill();
+
+  // Engine
+  ctx.fillStyle = engineFault ? '#222' : '#4B5563';
+  ctx.fillRect(0, 10, 18, 7);
+  ctx.fillStyle = '#111';
+  ctx.fillRect(16, 11, 3, 5);
+
+  ctx.restore();
+}
+
+function drawParticles() {
+  particles.forEach(p => {
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = Math.max(0, p.life);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+
+  debrisList.forEach(d => {
+    ctx.save();
+    ctx.translate(d.x, d.y);
+    ctx.rotate(d.angle);
+    ctx.fillStyle = d.color;
+    ctx.fillRect(-d.size / 2, -d.size / 4, d.size, d.size / 2);
+    ctx.restore();
+  });
+}
+
+function drawHUD() {
+  if (!gameStarted) return;
+
+  ctx.fillStyle = 'rgba(0, 20, 0, 0.75)';
+  ctx.fillRect(10, 10, 220, 110);
+  ctx.strokeStyle = hudMalfunction ? '#FF0000' : '#00FF00';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(10, 10, 220, 110);
+
+  if (hudMalfunction) {
+    ctx.fillStyle = '#FF0000';
+    ctx.font = '12px monospace';
+    ctx.fillText(`SYSTEM ERROR: HUD OFFLINE`, 20, 30);
+    ctx.fillText(`NO DATA AVAILABLE`, 20, 50);
+  } else {
+    ctx.fillStyle = '#00FF00';
+    ctx.font = '12px monospace';
+    ctx.fillText(`SPEED: ${(plane.speed * 20).toFixed(0)} knots`, 20, 30);
+    ctx.fillText(`ALT  : ${plane.altitude} ft`, 20, 50);
+    ctx.fillText(`PITCH: ${(-plane.angle * (180 / Math.PI)).toFixed(1)}°`, 20, 70);
+    
+    let gearStatus = gearJammed ? 'JAMMED' : (plane.gearPosition === 1 ? 'DOWN' : plane.gearPosition === 0 ? 'UP' : 'MOVING...');
+    ctx.fillText(`GEAR : ${gearStatus}`, 20, 90);
+
+    if (engineFault) {
+      ctx.fillStyle = '#FF3333';
+      ctx.fillText(`ENG 1: EGT HIGH`, 20, 110);
+    }
+  }
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+  ctx.fillRect(680, 10, 210, 70);
+  ctx.strokeStyle = '#666';
+  ctx.strokeRect(680, 10, 210, 70);
+  ctx.fillStyle = '#FFF';
+  ctx.font = '11px monospace';
+  ctx.fillText(`PAX LOAD : ${flightManifest.passengers}`, 690, 28);
+  ctx.fillText(`FUEL LOAD: ${flightManifest.fuelPounds} lbs`, 690, 46);
+  ctx.fillText(`MEALS    : ${flightManifest.meals}`, 690, 64);
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+  ctx.fillRect(10, 350, 450, 35);
+  ctx.strokeStyle = '#FFA500';
+  ctx.strokeRect(10, 350, 450, 35);
+  ctx.fillStyle = '#FFA500';
+  ctx.font = '12px monospace';
+  ctx.fillText(atcMessage, 20, 372);
+
+  if (plane.crashed) {
+    ctx.fillStyle = 'rgba(150, 0, 0, 0.85)';
+    ctx.fillRect(canvas.width / 2 - 160, canvas.height / 2 - 50, 320, 100);
+    ctx.strokeStyle = '#FFF';
+    ctx.strokeRect(canvas.width / 2 - 160, canvas.height / 2 - 50, 320, 100);
+
+    ctx.fillStyle = '#FFF';
+    ctx.font = '20px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('FLIGHT TERMINATED', canvas.width / 2, canvas.height / 2 - 15);
+    ctx.font = '13px sans-serif';
+    ctx.fillText(`Aircraft destroyed. Cargo lost.`, canvas.width / 2, canvas.height / 2 + 10);
+    ctx.fillText('Press "R" to return to menu', canvas.width / 2, canvas.height / 2 + 30);
+    ctx.textAlign = 'left';
+  }
+}
+
+function loop() {
+  update();
+  drawEnvironment();
+  drawBirds();
+  drawA320();
+  drawParticles();
+  drawHUD();
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+
+</body>
+</html>
